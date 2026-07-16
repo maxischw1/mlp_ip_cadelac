@@ -137,7 +137,7 @@ if __name__ == "__main__":
              'n_lstm_depth': n_lstm_depth,
              'hist_length': hist_length,
              'act_ld': 'Softplus',
-             'max_epoch': 1000
+             'max_epoch': 3000
             }
 
     model_name = 'epochs_' + str(hyper['max_epoch'])
