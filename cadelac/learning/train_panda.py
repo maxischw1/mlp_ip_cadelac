@@ -122,6 +122,7 @@ if __name__ == "__main__":
              'activation': 'Tanh',
              'net_arch_inertia': [30, 20],
              'net_arch_pot': [30, 20],
+             'net_arch_mlp': [30, 20],
              'b_init': 1.e-4,
              'b_diag_init': 0.001,
              'w_init': 'xavier_normal',
@@ -140,7 +141,7 @@ if __name__ == "__main__":
              'max_epoch': 3000
             }
 
-    model_name = 'epochs_' + str(hyper['max_epoch'])
+    model_name = 'mlp_lstm_epochs_' + str(hyper['max_epoch'])
     if add_noise_to_load_data:
         model_name += '_noise_'
     model_name += dataset_name + '.torch'
@@ -339,3 +340,21 @@ if __name__ == "__main__":
 
     fig_dir = str(LEARNING_DIR) + f"/figures/mpc_DeLaN_Performance/{model_type_folder}/{model_name}"
     plot_torques(test_tau, test_m, test_c, test_g, delan_tau, delan_m, delan_c, delan_g, test_labels, divider, fig_dir, render)
+
+#changed 6
+    if save_model:
+        save_dir = LEARNING_DIR + f"/trained_models/{model_type_folder}"
+        os.makedirs(save_dir, exist_ok=True)
+
+        save_path = os.path.join(save_dir, model_name)
+
+        torch.save(
+            {
+                "epoch": epoch_i,
+                "hyper": hyper,
+                "state_dict": delan_model.state_dict()
+            },
+            save_path
+        )
+
+        print(f"Saved final model: {save_path}")

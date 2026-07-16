@@ -2,256 +2,472 @@
 
 Source code for **Context-Aware Deep Lagrangian Networks for Model Predictive Control (CaDeLaC)**.
 
-If you find this work useful, please consider citing:
-```
+This fork extends the original CaDeLaC repository with a simplified **2-DOF hip-knee exoskeleton setup** and an experimental **Context-Aware LSTM + Direct Torque MLP** architecture.
+
+The original CaDeLaC implementation learns physics-consistent dynamics through a Deep Lagrangian Network. The direct-torque extension implemented in this fork instead uses:
+
+- an LSTM to infer a latent context vector \(z\) from motion history,
+- a feedforward MLP to map the current motion state and context directly to joint torque,
+- subject-wise evaluation on an unseen exoskeleton participant.
+
+> [!NOTE]
+> The original DeLaN implementation remains available in the repository.  
+> The currently active experimental path uses the direct torque MLP.
+
+---
+
+## Citation
+
+When using the original CaDeLaC method, please cite:
+
+```bibtex
 @inproceedings{schulze2025contextawaredelan,
   author={Schulze, Lucas and Peters, Jan and Arenz, Oleg},
-  booktitle={2025 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS)}, 
-  title={Context-Aware Deep Lagrangian Networks for Model Predictive Control}, 
+  booktitle={2025 IEEE/RSJ International Conference on Intelligent Robots and Systems (IROS)},
+  title={Context-Aware Deep Lagrangian Networks for Model Predictive Control},
   year={2025},
-  volume={},
-  number={},
-  pages={6939-6946},
-  keywords={},
+  pages={6939--6946},
   doi={10.1109/IROS60139.2025.11246292}
 }
 ```
 
-For experiment videos, check the [project website](https://schulze18.github.io/cadelac_website/).
-
-# Installation - Training and Simulation
-
-### Training and Simulation Setup
-1. Clone the Repository
-   ```bash
-   git clone git@github.com:Schulze18/cadelac.git
-   cd cadelac
-   git submodule update --recursive --init
-   ```
-
-2. Set Up Conda Environment
-   ```bash
-   conda env create -f cadelac_env.yml
-   conda activate cadelac
-   ```
-
-3. Install CaDeLaC as a Python pkg and additional Dependencies
-   ```bash
-   pip install -e .
-   pip install l4casadi==1.4.1 --no-build-isolation
-   ```
-
-
-4. Install Acados (v0.4.3)
-   Follow the [official installation guide](https://docs.acados.org/installation/):  
-   ```bash
-   cd acados
-   mkdir -p build && cd build
-   cmake -DACADOS_WITH_QPOASES=ON ..
-   make install -j4
-   ```
-
-   Install the Python interface:  
-   ```bash
-   pip install -e acados/interfaces/acados_template
-   ```
-
-   Add the following lines to your `.bashrc` file:  
-   ```bash
-   export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:"<acados_root>/lib"
-   export ACADOS_SOURCE_DIR="<acados_root>"
-   ```
+Experiment videos for the original project are available on the
+[CaDeLaC project website](https://schulze18.github.io/cadelac_website/).
 
 ---
 
-### Real Robot Setup
-1. Create a ROS Workspace
-   ```bash
-   mkdir -p ~/catkin_ws/src
-   cd ~/catkin_ws/src
-   git clone git@github.com:Schulze18/cadelac.git
-   cd cadelac
-   git submodule update --recursive --init
-   ```
+## Table of Contents
 
+- [Installation](#installation)
+- [Datasets](#datasets)
+- [Original CaDeLaC Usage](#original-cadelac-usage)
+- [Exoskeleton Extension](#exoskeleton-extension)
+  - [Research Goal](#research-goal)
+  - [Architecture](#architecture)
+  - [Current Configuration](#current-configuration)
+  - [Dataset Preparation](#dataset-preparation)
+  - [Training](#training)
+  - [Evaluation](#evaluation)
+  - [Recorded Results](#recorded-results)
+  - [Interpretation and Limitations](#interpretation-and-limitations)
+- [Repository Structure](#repository-structure)
+- [Repository Hygiene](#repository-hygiene)
+- [License](#license)
 
-2. Set Up Conda with ROS
-   ```bash
-   conda env create -f cadelac_ros_env.yml
-   conda activate cadelac_ros
-   ```
+---
 
-   To ensure **Acados** and **Libfranka** use the same compiler, add the installed compiler (`gcc-12`) to your `PATH` (recommended in `.bashrc`):
-   ```bash
-   export CC=$HOME/miniconda3/envs/cadelac_ros/bin/x86_64-conda-linux-gnu-gcc
-   export CXX=$HOME/miniconda3/envs/cadelac_ros/bin/x86_64-conda-linux-gnu-g++
-   ```
+# Installation
 
-3. **Install CaDeLaC and dependencies**
-   ```bash
-   pip install -e .
-   pip install l4casadi==1.4.1 --no-build-isolation
-   ```
+## Training and Simulation Setup
 
-4. **Install Acados (v0.4.3)**  
-   Follow the step 4 from **Training and Simulation Setup**.
-
-
-5. **Install Libfranka (v0.13.3)**  
-   [Libfranka](https://github.com/frankaemika/libfranka) provides low-level control for Franka Emika research robots.
-
-   ```bash
-   git clone --recurse-submodules https://github.com/frankarobotics/libfranka.git
-   cd libfranka
-   git checkout 0.13.3
-   git submodule update
-   mkdir build && cd build
-   cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/opt/openrobots/lib/cmake -DBUILD_TESTS=OFF ..
-   make
-   ```
-
-6. **Build the ROS workspace**
-   ```bash
-   cd ~/catkin_ws
-   catkin_make -DPYTHON_EXECUTABLE=$(which python) -DCMAKE_BUILD_TYPE=Release -DFranka_DIR:PATH={PATH_TO_LIBFRANKA}/libfranka/build -j2
-   source devel/setup.bash
-   ```
-
-## Datasets
-
-The datasets used for training are available on [Hugging Face](https://huggingface.co/datasets/schulze18/cadelac):
+### 1. Clone the Repository
 
 ```bash
-git clone https://huggingface.co/datasets/schulze18/cadelac cadelac/learning/datasets/
+git clone git@github.com:maxischw1/mlp_ip_cadelac.git
+cd mlp_ip_cadelac
+git submodule update --recursive --init
 ```
 
-## Training and Evaluation
-All scripts related to training the proposed models are located in the `learning` folder.  
-The training pipeline is adapted from [Deep Lagrangian Networks](https://github.com/milutter/deep_lagrangian_networks) and implemented in **PyTorch**.
+### 2. Create the Conda Environment
 
+```bash
+conda env create -f cadelac_env.yml
+conda activate cadelac
+```
 
-### Evaluate Pretrained Model (IROS 2025)
+### 3. Install CaDeLaC and Additional Dependencies
+
+```bash
+pip install -e .
+pip install l4casadi==1.4.1 --no-build-isolation
+```
+
+### 4. Install Acados
+
+The repository currently uses Acados `v0.4.3`.
+
+Follow the
+[official Acados installation guide](https://docs.acados.org/installation/).
+
+```bash
+cd acados
+mkdir -p build
+cd build
+
+cmake -DACADOS_WITH_QPOASES=ON ..
+make install -j4
+```
+
+Install the Python interface:
+
+```bash
+cd ../../
+pip install -e acados/interfaces/acados_template
+```
+
+Add the following environment variables to `~/.bashrc`:
+
+```bash
+export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:<acados_root>/lib"
+export ACADOS_SOURCE_DIR="<acados_root>"
+```
+
+Reload the shell configuration:
+
+```bash
+source ~/.bashrc
+```
+
+---
+
+## Real Robot Setup
+
+### 1. Create a ROS Workspace
+
+```bash
+mkdir -p ~/catkin_ws/src
+cd ~/catkin_ws/src
+
+git clone git@github.com:maxischw1/mlp_ip_cadelac.git
+cd mlp_ip_cadelac
+
+git submodule update --recursive --init
+```
+
+### 2. Create the ROS Conda Environment
+
+```bash
+conda env create -f cadelac_ros_env.yml
+conda activate cadelac_ros
+```
+
+### 3. Configure the Compiler
+
+To ensure that Acados and Libfranka use the same compiler:
+
+```bash
+export CC="$HOME/miniconda3/envs/cadelac_ros/bin/x86_64-conda-linux-gnu-gcc"
+export CXX="$HOME/miniconda3/envs/cadelac_ros/bin/x86_64-conda-linux-gnu-g++"
+```
+
+These variables may also be added to `~/.bashrc`.
+
+### 4. Install CaDeLaC
+
+```bash
+pip install -e .
+pip install l4casadi==1.4.1 --no-build-isolation
+```
+
+### 5. Install Libfranka
+
+```bash
+git clone --recurse-submodules https://github.com/frankarobotics/libfranka.git
+cd libfranka
+
+git checkout 0.13.3
+git submodule update
+
+mkdir -p build
+cd build
+
+cmake \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH=/opt/openrobots/lib/cmake \
+  -DBUILD_TESTS=OFF \
+  ..
+
+make
+```
+
+### 6. Build the ROS Workspace
+
+```bash
+cd ~/catkin_ws
+
+catkin_make \
+  -DPYTHON_EXECUTABLE="$(which python)" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DFranka_DIR:PATH="<path-to-libfranka>/libfranka/build" \
+  -j2
+
+source devel/setup.bash
+```
+
+---
+
+# Datasets
+
+The datasets used by the original CaDeLaC experiments are available from
+[Hugging Face](https://huggingface.co/datasets/schulze18/cadelac).
+
+```bash
+git clone \
+  https://huggingface.co/datasets/schulze18/cadelac \
+  cadelac/learning/datasets/
+```
+
+The exoskeleton extension uses separately generated `.pkl` datasets described in
+[Dataset Preparation](#dataset-preparation).
+
+---
+
+# Original CaDeLaC Usage
+
+## Evaluate the Pretrained IROS 2025 Model
+
 ```bash
 python -m cadelac.learning.train_panda -l 2
 ```
 
-### Learn Residual Dynamics
+## Train Residual Dynamics
+
 ```bash
 python -m cadelac.learning.train_panda -l 0
 ```
-> **Note:**  
-Due to the dataset size, data loading may take a few minutes. During training, each epoch took around 30s on an NVIDIA GeForce RTX 4080. In the paper, we trained for 3000 epochs, but 1000 epochs already achieve similar performance.
 
-### Evaluate Trained Model
+## Evaluate a Trained Residual Model
+
 ```bash
 python -m cadelac.learning.train_panda -l 1
 ```
 
-### Learn Robot Model with DeLaN
+## Train a Full DeLaN Robot Model
+
 ```bash
 python -m cadelac.learning.train_panda -l 0 -f 1
 ```
 
-### Evaluate DeLaN
+## Evaluate a Full DeLaN Robot Model
+
 ```bash
 python -m cadelac.learning.train_panda -l 1 -f 1
 ```
 
+> [!NOTE]
+> The dataset can require several minutes to load.  
+> The original paper trained for 3000 epochs, although shorter runs may already
+> provide useful performance.
+
 ---
 
-## Control Experiments
+## MuJoCo Controller Evaluation
 
-### Mujoco Simulation
+Evaluate joint tracking under random loads:
 
-To evaluate joint tracking under random loads:
 ```bash
 python -m cadelac.control.eval_controllers_multiple_envs -c 2
 ```
 
 Controller options:
-- `-c 0`: Nominal MPC
-- `-c 1`: MPC + EKF
-- `-c 2`: CaDeLaC (Context-Aware MPC)
+
+| Argument | Controller |
+|---:|---|
+| `-c 0` | Nominal MPC |
+| `-c 1` | MPC + EKF |
+| `-c 2` | CaDeLaC context-aware MPC |
 
 ---
 
-### Real Franka Robot
+## Real Franka Robot
 
-**Terminal 1:** Launch hardware interface
+### Terminal 1: Launch the Hardware Interface
+
 ```bash
 conda activate cadelac_ros
-source catkin_ws/devel/setup.bas
-roslaunch franka_example_controllers effort_joint_controller.launch robot_ip:={ROBOT_IP} load_gripper:=true robot:=panda
+source ~/catkin_ws/devel/setup.bash
+
+roslaunch \
+  franka_example_controllers \
+  effort_joint_controller.launch \
+  robot_ip:="<robot-ip>" \
+  load_gripper:=true \
+  robot:=panda
 ```
 
-**Terminal 2:** Run CaDeLaC controller
+### Terminal 2: Run the CaDeLaC Controller
+
 ```bash
 conda activate cadelac_ros
-source catkin_ws/devel/setup.bash 
-cd catkin_ws/src/cadelac/
+source ~/catkin_ws/devel/setup.bash
+
+cd ~/catkin_ws/src/mlp_ip_cadelac
+
 python -m cadelac.ros.cadelac_node -c 2
 ```
 
-> **Note:**  
-As Acados needs to compile the controller in the first run, which will take several minutes for CaDeLaC, the safety flag [compilation_run](https://github.com/Schulze18/cadelac/blob/main/cadelac/ros/cadelac_node.py#L63) prevents the controller to be executed and holds the robot in place. Once the compilation is done, you can stop the script, set the flag to `False` and run again the script which will load the compiled controller. If you run a new controller for the first time, set the flag to `True` again.
+> [!WARNING]
+> Acados compiles a controller during its first execution. The initial compilation
+> may require several minutes. Follow the safety procedure implemented in
+> `cadelac/ros/cadelac_node.py` before executing the controller on hardware.
 
 ---
-## TODO
-- [ ] Additional implementation details
-- [ ] Dataset collection scripts
 
-## Exoskeleton Extension: Script Structure and Usage
+# Exoskeleton Extension
 
-This fork extends CaDeLaC with a simplified **2-DOF hip-knee exoskeleton setup** for Context-Aware DeLaN training and evaluation.
+## Research Goal
 
-The original CaDeLaC training pipeline remains centered around:
+The exoskeleton extension investigates whether a single learned dynamics model can
+adapt its joint-torque prediction to an unseen human subject.
+
+The current experimental question is:
+
+> Can an LSTM infer a latent user and task context from recent motion history and
+> enable a direct MLP to predict hip and knee torque for an unseen participant?
+
+The model is trained on non-BT24 recordings and evaluated on BT24 recordings.
+
+The BT24 test set contains:
+
+- `ball_toss` movement segments,
+- `incline_walk` movement segments.
+
+This implements a subject-wise generalization experiment rather than a random
+sample-level train/test split.
+
+---
+
+## Architecture
+
+The current architecture contains two active learned components:
+
+1. **Context LSTM**
+   - processes a fixed history window,
+   - outputs a latent context vector \(z\).
+
+2. **Direct Torque MLP**
+   - receives the current position, velocity and acceleration,
+   - receives the latent context \(z\),
+   - directly predicts hip and knee torque.
+
+```mermaid
+flowchart LR
+    H["History window<br/>q history, q̇ history, τ history"]
+    LSTM["LSTM context encoder"]
+    Z["Latent context z"]
+
+    Q["Current q"]
+    QD["Current q̇"]
+    QDD["Current q̈"]
+
+    CAT["Concatenation"]
+    MLP["Direct torque MLP<br/>16 → 30 → 20 → 2"]
+    TAU["Predicted torque τ̂<br/>hip and knee"]
+
+    H --> LSTM
+    LSTM --> Z
+
+    Q --> CAT
+    QD --> CAT
+    QDD --> CAT
+    Z --> CAT
+
+    CAT --> MLP
+    MLP --> TAU
+```
+
+Mathematically, the active prediction path is:
+
+\[
+z_t =
+\operatorname{LSTM}
+\left(
+x_{t-h:t-1}
+\right)
+\]
+
+\[
+\hat{\tau}_t =
+\operatorname{MLP}
+\left(
+q_t,
+\dot q_t,
+\ddot q_t,
+z_t
+\right)
+\]
+
+where \(h\) denotes the history length.
+
+---
+
+## Implementation
+
+The architecture is implemented in:
 
 ```text
-cadelac/learning/train_panda.py
+cadelac/learning/models/context_aware_delan.py
 ```
 
-Additional helper scripts for dataset preparation, training shortcuts, and evaluation are organized under the `scripts/` directory.
+The direct torque network is created through the existing `ComponentNN` class:
+
+```python
+self.torque_net = ComponentNN(
+    3 * self.n_dof,
+    self.n_dof,
+    **kwargs_mlp
+)
+```
+
+The current state input is constructed as:
+
+```python
+state_input = torch.cat((q, qd, qdd), dim=-1)
+```
+
+The latent context is appended inside `ComponentNN`, and the torque is predicted by:
+
+```python
+tau_pred = self.torque_net(state_input, enc_input)
+```
+
+The active dynamics method is selected through:
+
+```python
+self.dyn_model = self.dyn_model_mlp
+```
+
+The original Hessian-based DeLaN implementation remains in the class for
+compatibility and comparison, but it is not used by the active direct-torque
+forward path.
 
 ---
 
-### Script Directory Structure
+## Current Configuration
+
+| Parameter | Value | Description |
+|---|---:|---|
+| Degrees of freedom | `2` | Left hip and left knee |
+| History length | `15` | Number of previous timesteps |
+| LSTM input size | `6` | \(q\), \(\dot q\), and \(\tau\) for two joints |
+| LSTM hidden size | `10` | Hidden-state dimension |
+| LSTM depth | `5` | Number of recurrent layers |
+| Context dimension | `10` | Dimension of latent vector \(z\) |
+| State input size | `6` | \(q\), \(\dot q\), and \(\ddot q\) |
+| Complete MLP input | `16` | Six state values plus ten context values |
+| MLP hidden layers | `[30, 20]` | Feedforward hidden-layer sizes |
+| MLP output size | `2` | Hip and knee torque |
+| MLP activation | `Tanh` | Hidden-layer activation |
+| MLP trigonometric transform | Disabled | Raw state values are used |
+| Maximum epochs | `3000` | Current full training configuration |
+| Artificial data noise | Disabled | Real measurements already contain noise |
+
+The two output dimensions represent:
 
 ```text
-scripts/
-├── data/
-│   ├── make_exo_pkl.py
-│   ├── make_all_exo_pkls.py
-│   └── fix_exo_pkl_time.py
-│
-├── training/
-│   ├── train_exo_context_current_config.sh
-│   └── eval_exo_context_current_config.sh
-│
-└── evaluation/
-    ├── evaluate_context_checkpoints.py
-    ├── plot_context_checkpoint_metrics.py
-    ├── plot_zoomed_context_torque_prediction.py
-    └── plot_left_leg_torque_grid.py
-```
-
-General usage from the repository root:
-
-```bash
-cd ~/code/ip_cadelac
-conda activate cadelac
+Joint 0: left hip torque
+Joint 1: left knee torque
 ```
 
 ---
 
-## 1. Dataset Preparation Scripts
+# Dataset Preparation
 
-Dataset preparation scripts are stored in:
+Dataset scripts are stored in:
 
 ```text
 scripts/data/
 ```
-
-These scripts convert processed exoskeleton CSV data into the `.pkl` format expected by the CaDeLaC/DeLaN training pipeline.
 
 Generated datasets are written to:
 
@@ -261,22 +477,24 @@ cadelac/learning/datasets/panda/
 
 ---
 
-### `scripts/data/make_exo_pkl.py`
+## `scripts/data/make_exo_pkl.py`
 
-Creates a simple **single left-leg 2-DOF exoskeleton dataset** from two local CSV files:
+Creates a simple single-left-leg 2-DOF dataset from:
 
 ```text
 ~/Downloads/Exo.csv
 ~/Downloads/Joint_Moments_Filt.csv
 ```
 
-The script extracts left hip and knee angles, velocities, and joint moments. Angles are converted from degrees to radians, accelerations are computed from filtered velocities, and the trajectory is split into segments.
+The script:
 
-Output:
-
-```text
-cadelac/learning/datasets/panda/exo_hip_knee_delan_2dof_left_only.pkl
-```
+- extracts left hip and knee joint positions,
+- extracts or derives joint velocities,
+- computes joint accelerations,
+- reads filtered joint moments,
+- converts angles from degrees to radians,
+- splits the recording into trajectory segments,
+- writes the format expected by the CaDeLaC training pipeline.
 
 Run:
 
@@ -284,15 +502,19 @@ Run:
 python scripts/data/make_exo_pkl.py
 ```
 
-Use this script mainly for quick single-file tests or debugging the dataset conversion pipeline.
+Primary output:
+
+```text
+cadelac/learning/datasets/panda/exo_hip_knee_delan_2dof_left_only.pkl
+```
 
 ---
 
-### `scripts/data/make_all_exo_pkls.py`
+## `scripts/data/make_all_exo_pkls.py`
 
-Creates the main **left- and right-leg all-trials exoskeleton datasets** from a full processed data folder.
+Creates the main all-trials exoskeleton datasets.
 
-Expected input folder:
+Expected source directory:
 
 ```text
 ~/Downloads/codeocean_exo_data
@@ -305,66 +527,49 @@ Exo.csv
 Joint_Moments_Filt.csv
 ```
 
-It creates segmented datasets for both sides:
-
-```text
-cadelac/learning/datasets/panda/exo_hip_knee_delan_2dof_left_all_trials.pkl
-cadelac/learning/datasets/panda/exo_hip_knee_delan_2dof_right_all_trials.pkl
-```
-
-It also creates Context-Aware dataset variants with the `_context.pkl` suffix.
-
-For the simplified Context-Aware setup, the filtered joint moment signals from `Joint_Moments_Filt.csv` are used as the torque target `tau`.
-
-In this setup, the Context-Aware residual target is set directly to this torque target:
-
-```text
-diff_tau = tau
-```
-```bash
-tau_cols = ["hip_flexion_l_moment", "knee_angle_l_moment"]
-```
-
-
-Therefore, the Context-Aware training dataset is:
-
-```text
-cadelac/learning/datasets/panda/exo_hip_knee_delan_2dof_left_all_trials_context.pkl
-```
-
 Run:
 
 ```bash
 python scripts/data/make_all_exo_pkls.py
 ```
 
-This is the main dataset generation script for the current exoskeleton experiments.
-
----
-
-### `scripts/data/fix_exo_pkl_time.py`
-
-Fixes the time axis of an already generated exoskeleton `.pkl` dataset.
-
-Current target file:
+Generated files include:
 
 ```text
 cadelac/learning/datasets/panda/exo_hip_knee_delan_2dof_left_all_trials.pkl
+cadelac/learning/datasets/panda/exo_hip_knee_delan_2dof_right_all_trials.pkl
+cadelac/learning/datasets/panda/exo_hip_knee_delan_2dof_left_all_trials_context.pkl
 ```
 
-The script creates a backup first:
+The current LSTM-plus-MLP experiment uses:
 
 ```text
-exo_hip_knee_delan_2dof_left_all_trials.before_time_fix.pkl
+cadelac/learning/datasets/panda/exo_hip_knee_delan_2dof_left_all_trials_context.pkl
 ```
 
-Then it enforces a uniform timestep of:
+Filtered joint moments from `Joint_Moments_Filt.csv` are used as torque targets.
 
-```text
+For the simplified Context-Aware experiment:
+
+```python
+diff_tau = tau
+```
+
+This means that the residual target handled by the existing training pipeline is
+equal to the measured torque target.
+
+---
+
+## `scripts/data/fix_exo_pkl_time.py`
+
+Repairs the time axis of a generated exoskeleton dataset and recomputes
+accelerations from velocity.
+
+The intended fixed timestep is:
+
+```python
 dt = 0.005  # 200 Hz
 ```
-
-and recomputes joint accelerations from `qv`.
 
 Run:
 
@@ -372,62 +577,90 @@ Run:
 python scripts/data/fix_exo_pkl_time.py
 ```
 
-Use this script only when the generated dataset has non-uniform or inconsistent timestep information.
+The script creates a backup before modifying its target dataset.
+
+> [!CAUTION]
+> Use this script only when the generated dataset contains nonuniform or
+> inconsistent timestamp information.
 
 ---
 
-## 2. Training Scripts
+# Training
 
-Training scripts are stored in:
-
-```text
-scripts/training/
-```
-
-They are thin shell wrappers around:
+The main training implementation is:
 
 ```text
 cadelac/learning/train_panda.py
 ```
 
-They do not define a separate training configuration. Instead, they use the current configuration inside `train_panda.py`.
+The direct torque MLP architecture is configured through:
 
-Experiment parameters such as `max_epoch`, `hist_length`, network sizes, and dataset names remain centralized in the main training file.
+```python
+"net_arch_mlp": [30, 20]
+```
+
+The final model uses the following filename pattern:
+
+```text
+mlp_lstm_epochs_<epochs>exo_hip_knee_delan_2dof_left_all_trials_context.torch
+```
+
+The 3000-epoch model is stored at:
+
+```text
+cadelac/learning/trained_models/res_model/panda/ContextAware/
+└── mlp_lstm_epochs_3000exo_hip_knee_delan_2dof_left_all_trials_context.torch
+```
 
 ---
 
-### `scripts/training/train_exo_context_current_config.sh`
+## Full GPU Training
 
-Starts a new Context-Aware exoskeleton training run with the currently configured settings in `train_panda.py`.
-
-Internally, it runs:
+From the repository root:
 
 ```bash
-python -u -m cadelac.learning.train_panda \
-  -l 0 \
-  -f 0 \
-  -m 1 \
+mkdir -p logs
+
+python -m cadelac.learning.train_panda \
+  -c 1 \
+  -i 0 \
+  -s 0 \
   -r 0 \
-  -c 0
+  -l 0 \
+  -m 1 \
+  -f 0 \
+  2>&1 | tee "logs/mlp_lstm_train_3000_$(date +%Y%m%d_%H%M).log"
 ```
 
-Meaning:
+### Training Arguments
 
-```text
--l 0  do not load an existing model; start training from scratch
--f 0  use the Context-Aware/residual branch
--m 1  save the trained model
--r 0  do not render plots during training
--c 0  run on CPU
-```
+| Argument | Meaning |
+|---:|---|
+| `-c 1` | Use CUDA when available |
+| `-i 0` | Use CUDA device 0 |
+| `-s 0` | Use random seed 0 |
+| `-r 0` | Disable interactive plot rendering |
+| `-l 0` | Start a new model instead of loading one |
+| `-m 1` | Save checkpoints and the final model |
+| `-f 0` | Use the Context-Aware residual branch |
 
-Run:
+> [!IMPORTANT]
+> Use `-l 0` for new training.  
+> The load-model path is intended for evaluation of an existing checkpoint.
+
+---
+
+## Training Wrapper
+
+The existing wrapper can also be used:
 
 ```bash
 bash scripts/training/train_exo_context_current_config.sh
 ```
 
-Log output:
+It executes the current configuration stored in `train_panda.py`.
+
+The corresponding log is written to:
 
 ```text
 logs/exo_context_current_config_train.log
@@ -435,14 +668,10 @@ logs/exo_context_current_config_train.log
 
 ---
 
-### `scripts/training/eval_exo_context_current_config.sh`
-
-Loads and evaluates a saved Context-Aware exoskeleton model using the currently configured settings in `train_panda.py`.
-
-Internally, it runs:
+## Evaluate the Current Model Through `train_panda.py`
 
 ```bash
-python -u -m cadelac.learning.train_panda \
+python -m cadelac.learning.train_panda \
   -l 1 \
   -f 0 \
   -m 0 \
@@ -450,31 +679,12 @@ python -u -m cadelac.learning.train_panda \
   -c 0
 ```
 
-Meaning:
-
-```text
--l 1  load a saved model
--f 0  use the Context-Aware/residual branch
--m 0  do not save a new model
--r 0  do not render additional figures
--c 0  run on CPU
-```
-
-Run:
-
-```bash
-bash scripts/training/eval_exo_context_current_config.sh
-```
-
-Log output:
-
-```text
-logs/exo_context_current_config_eval.log
-```
+This loads the configured model, evaluates the BT24 split and generates the
+legacy `plot_torques` output.
 
 ---
 
-## 3. Evaluation Scripts
+# Evaluation
 
 Evaluation scripts are stored in:
 
@@ -482,255 +692,373 @@ Evaluation scripts are stored in:
 scripts/evaluation/
 ```
 
-These scripts evaluate saved Context-Aware DeLaN models, compare predicted torque against measured torque, and generate plots and metric CSV files.
+The existing evaluation pipeline is reused for the direct torque MLP because the
+public model interface remains:
 
-The main Context-Aware dataset expected by the evaluation scripts is:
-
-```text
-cadelac/learning/datasets/panda/exo_hip_knee_delan_2dof_left_all_trials_context.pkl
+```python
+tau_pred, dEdt = model(q, qd, qdd, lstm_input)
 ```
 
-The expected model folder is:
-
-```text
-cadelac/learning/trained_models/res_model/panda/ContextAware/
-```
-
-Generated plots and metrics are written to:
-
-```text
-logs/
-```
+The direct MLP therefore remains compatible with the existing torque plotting
+and metric scripts.
 
 ---
 
-### `scripts/evaluation/evaluate_context_checkpoints.py`
+## Complete Evaluation Package
 
-Evaluates all available Context-Aware checkpoints and final models on the BT24 test split.
-
-It searches for models in:
+The recommended entry point is:
 
 ```text
-cadelac/learning/trained_models/res_model/panda/ContextAware/
-cadelac/learning/trained_models/res_model/panda/ContextAware/checkpoint/
+run_context_eval_package.py
 ```
 
-It computes torque prediction metrics and writes them to:
+Set the trained model:
+
+```bash
+MODEL_PATH="$PWD/cadelac/learning/trained_models/res_model/panda/ContextAware/mlp_lstm_epochs_3000exo_hip_knee_delan_2dof_left_all_trials_context.torch"
+```
+
+Run the full pipeline:
+
+```bash
+python run_context_eval_package.py "$MODEL_PATH"
+```
+
+The runner executes:
+
+1. the full BT24 model evaluation,
+2. a complete BT24 torque plot,
+3. a `ball_toss` torque plot,
+4. an `incline_walk` torque plot,
+5. a left-leg `ball_toss` torque grid,
+6. a left-leg `incline_walk` torque grid,
+7. metric CSV generation,
+8. log collection,
+9. Desktop ZIP creation.
+
+---
+
+## Evaluation Outputs
+
+The MLP-specific output directories are:
 
 ```text
-logs/exo_context_checkpoint_metrics.csv
+logs/torque_zoom_mlp_hist15_3000/
+logs/left_leg_torque_grid_mlp_hist15_3000/
 ```
 
-Run:
+Typical generated files include:
+
+```text
+exo_context_zoomed_torque_full_BT24.png
+exo_context_zoomed_torque_full_BT24_metrics.csv
+
+exo_context_zoomed_torque_ball_toss.png
+exo_context_zoomed_torque_ball_toss_metrics.csv
+
+exo_context_zoomed_torque_incline_walk.png
+exo_context_zoomed_torque_incline_walk_metrics.csv
+
+BT24_left_ball_toss_torque_grid.png
+BT24_left_ball_toss_torque_grid_metrics.csv
+
+BT24_left_incline_walk_torque_grid.png
+BT24_left_incline_walk_torque_grid_metrics.csv
+```
+
+The Desktop package follows the naming pattern:
+
+```text
+mlp_ip_cadelac_mlp_hist15_3000_eval_outputs_<timestamp>.zip
+```
+
+The ZIP intentionally contains only evaluation artifacts:
+
+- generated graphics,
+- metric CSV files,
+- training and evaluation logs,
+- a package-content summary.
+
+It does **not** contain:
+
+- the trained checkpoint,
+- the dataset,
+- the repository source code,
+- temporary Python files.
+
+---
+
+## Individual Evaluation Scripts
+
+### Checkpoint Metrics
+
+Evaluate available Context-Aware checkpoints:
 
 ```bash
 python scripts/evaluation/evaluate_context_checkpoints.py
 ```
 
-Use this script to compare model performance across checkpoints or training epochs.
-
----
-
-### `scripts/evaluation/plot_context_checkpoint_metrics.py`
-
-Plots checkpoint-level metrics from:
+Generated metric file:
 
 ```text
 logs/exo_context_checkpoint_metrics.csv
 ```
 
-It creates:
+Plot the checkpoint metrics:
+
+```bash
+python scripts/evaluation/plot_context_checkpoint_metrics.py
+```
+
+Generated figures:
 
 ```text
 logs/exo_context_torque_mse_over_epochs.png
 logs/exo_context_torque_rmse_over_epochs.png
 ```
 
-Run:
-
-```bash
-python scripts/evaluation/plot_context_checkpoint_metrics.py
-```
-
-Use this after running:
-
-```bash
-python scripts/evaluation/evaluate_context_checkpoints.py
-```
-
 ---
 
-### `scripts/evaluation/plot_zoomed_context_torque_prediction.py`
-
-Creates a detailed torque prediction plot comparing:
-
-```text
-measured torque
-Context-Aware DeLaN predicted torque
-```
-
-The plot shows Joint 0 and Joint 1 torque over time and reports:
-
-```text
-total Torque MSE
-total Torque RMSE
-Joint 0 MSE/RMSE
-Joint 1 MSE/RMSE
-```
-
-The script also saves a small metrics CSV next to the generated plot.
-
-Set a model path:
-
-```bash
-MODEL="cadelac/learning/trained_models/res_model/panda/ContextAware/epochs_3000exo_hip_knee_delan_2dof_left_all_trials_context.torch"
-```
-
-Run on the full BT24 test split:
+### Full BT24 Torque Plot
 
 ```bash
 python scripts/evaluation/plot_zoomed_context_torque_prediction.py \
-  --model "$MODEL" \
-  --output-dir logs/torque_zoom
+  --model "$MODEL_PATH" \
+  --output-dir logs/torque_zoom_mlp_hist15_3000
 ```
 
-Run only for `ball_toss` segments:
+### Ball-Toss Torque Plot
 
 ```bash
 python scripts/evaluation/plot_zoomed_context_torque_prediction.py \
-  --model "$MODEL" \
+  --model "$MODEL_PATH" \
   --segment ball_toss \
-  --output-dir logs/torque_zoom
+  --output-dir logs/torque_zoom_mlp_hist15_3000
 ```
 
-Run only for `incline_walk` segments:
+### Incline-Walk Torque Plot
 
 ```bash
 python scripts/evaluation/plot_zoomed_context_torque_prediction.py \
-  --model "$MODEL" \
+  --model "$MODEL_PATH" \
   --segment incline_walk \
-  --output-dir logs/torque_zoom
+  --output-dir logs/torque_zoom_mlp_hist15_3000
 ```
 
-Optionally limit the plotted time window:
-
-```bash
-python scripts/evaluation/plot_zoomed_context_torque_prediction.py \
-  --model "$MODEL" \
-  --segment incline_walk \
-  --max-samples 500 \
-  --output-dir logs/torque_zoom
-```
-
----
-
-### `scripts/evaluation/plot_left_leg_torque_grid.py`
-
-Creates a grid-style torque plot for BT24 left-leg movement segments.
-
-Each column corresponds to one movement segment. The two rows correspond to:
-
-```text
-Joint 0: hip
-Joint 1: knee
-```
-
-The plot compares measured torque against Context-Aware DeLaN prediction and writes a metrics CSV.
-
-Set a model path:
-
-```bash
-MODEL="cadelac/learning/trained_models/res_model/panda/ContextAware/epochs_3000exo_hip_knee_delan_2dof_left_all_trials_context.torch"
-```
-
-Run for `ball_toss`:
+### Ball-Toss Torque Grid
 
 ```bash
 python scripts/evaluation/plot_left_leg_torque_grid.py \
-  --model "$MODEL" \
+  --model "$MODEL_PATH" \
   --movement ball_toss \
-  --output-dir logs/left_leg_torque_grid
+  --output-dir logs/left_leg_torque_grid_mlp_hist15_3000
 ```
 
-Run for `incline_walk`:
+### Incline-Walk Torque Grid
 
 ```bash
 python scripts/evaluation/plot_left_leg_torque_grid.py \
-  --model "$MODEL" \
+  --model "$MODEL_PATH" \
   --movement incline_walk \
-  --output-dir logs/left_leg_torque_grid
+  --output-dir logs/left_leg_torque_grid_mlp_hist15_3000
 ```
-
-Use this script for quick visual comparison across multiple BT24 movement segments.
 
 ---
 
-## 4. Current Exoskeleton Configuration
+# Recorded Results
 
-The current exoskeleton setup uses a simplified 2-DOF hip-knee model:
+The following values were reported by the completed 3000-epoch run:
 
-```text
-n_dof = 2
-```
+| Metric | Recorded value |
+|---|---:|
+| Training samples | `41,224` |
+| Total reported parameters | `7,746` |
+| LSTM parameters | `4,350` |
+| Reported MLP parameters | `3,396` |
+| Training epochs | `3,000` |
+| Total training time | `450.2 s` |
+| Final training loss | `5.225e-04` |
+| Final inverse-dynamics loss | `5.225e-04` |
+| Reported torque MSE | `1.436e-03` |
+| Reported power MSE | `1.693e-04` |
 
-The two modeled joints are:
+The model was trained on BT23 movement segments and evaluated on unseen BT24
+`ball_toss` and `incline_walk` segments.
 
-```text
-Joint 0: hip
-Joint 1: knee
-```
-
-The Context-Aware LSTM history input is built from:
-
-```text
-q history
-qdot history
-measured torque history tau
-```
-
-In this simplified setup:
-
-```text
-diff_tau = tau
-```
-
-Artificial training noise is disabled because the exoskeleton data already comes from real measured motion data.
+> [!NOTE]
+> The displayed loss values are batch- and normalization-dependent. Comparisons
+> should use the same dataset split, normalization and evaluation scripts.
 
 ---
 
-## 5. Train/Test Split
+# Interpretation and Limitations
 
-The current exoskeleton experiments use a subject-wise split.
+## Primary Valid Output
 
-The test split is selected automatically by searching for labels containing:
+The physically relevant primary output of the direct MLP is:
 
 ```text
-BT24
+predicted total residual torque
 ```
 
-BT24 segments are therefore used for testing. The remaining non-BT24 labels are used for training.
+The main comparisons should therefore use:
 
-This is intended to evaluate whether the Context-Aware model can generalize to a subject that was not part of the training split.
+- measured versus predicted torque,
+- total torque MSE,
+- total torque RMSE,
+- joint-wise hip and knee errors,
+- movement-specific Ball-Toss and Incline-Walk plots.
 
 ---
 
-## 6. Repository Hygiene
+## No Explicit Physical Torque Decomposition
 
-Generated experiment artifacts should remain local and should not be committed.
+The direct torque MLP does not explicitly learn:
 
-Ignored artifacts include:
+\[
+H(q)\ddot q
+\]
+
+\[
+c(q,\dot q)
+\]
+
+\[
+g(q)
+\]
+
+as separately identifiable physical components.
+
+Legacy evaluation code may still calculate apparent inertia, Coriolis and gravity
+terms by setting selected MLP inputs to zero. These values are not guaranteed to
+represent a physically valid decomposition.
+
+They should therefore not be interpreted in the same way as the corresponding
+terms produced by a physics-consistent DeLaN.
+
+---
+
+## Power Output
+
+The model retains the interface:
+
+```python
+return tau_pred, dEdt
+```
+
+with:
+
+```python
+dEdt = torch.sum(qd * tau_pred, dim=1)
+```
+
+This keeps the direct MLP compatible with the existing training and evaluation
+pipeline.
+
+For the direct black-box MLP, this value represents mechanical power computed
+from predicted torque. It does not independently prove energy conservation.
+
+---
+
+## Legacy Components
+
+The original inertia and potential networks remain in
+`ContextAwareDeLaN` for compatibility and comparison.
+
+The active direct-torque path does not use them to compute `tau_pred`.
+
+Consequently:
+
+- inactive legacy parameters may still appear in total parameter counts,
+- model checkpoints may contain inactive DeLaN parameters,
+- the current implementation prioritizes a minimal and reversible code change.
+
+A future cleanup may separate the direct MLP into a dedicated model class.
+
+---
+
+# Repository Structure
+
+```text
+mlp_ip_cadelac/
+├── cadelac/
+│   ├── control/
+│   ├── learning/
+│   │   ├── datasets/
+│   │   │   └── panda/
+│   │   ├── models/
+│   │   │   └── context_aware_delan.py
+│   │   ├── trained_models/
+│   │   └── train_panda.py
+│   └── ros/
+│
+├── scripts/
+│   ├── data/
+│   │   ├── make_exo_pkl.py
+│   │   ├── make_all_exo_pkls.py
+│   │   └── fix_exo_pkl_time.py
+│   │
+│   ├── training/
+│   │   ├── train_exo_context_current_config.sh
+│   │   └── eval_exo_context_current_config.sh
+│   │
+│   └── evaluation/
+│       ├── evaluate_context_checkpoints.py
+│       ├── plot_context_checkpoint_metrics.py
+│       ├── plot_zoomed_context_torque_prediction.py
+│       └── plot_left_leg_torque_grid.py
+│
+├── run_context_eval_package.py
+├── cadelac_env.yml
+├── cadelac_ros_env.yml
+├── LICENSE
+└── README.md
+```
+
+---
+
+# Repository Hygiene
+
+Generated experiment artifacts should remain local.
+
+The following should generally not be committed:
 
 ```text
 logs/
+exports/
 generated plots
 generated metric CSV files
 generated .pkl datasets
-trained .torch model files
-checkpoint folders
-zip packages
-local helper scripts
+trained .torch models
+checkpoint directories
+Desktop ZIP packages
+Python cache files
+editor backup files
 ```
 
-This keeps the repository focused on source code, scripts, and documentation.
+Before committing, inspect the repository:
 
-Datasets, trained models, logs, and plots should be regenerated locally or shared separately when needed.
+```bash
+git status --short
+```
+
+Check whether a file is ignored:
+
+```bash
+git check-ignore -v <path>
+```
+
+Check formatting problems:
+
+```bash
+git diff --check
+```
+
+The repository should contain source code, reusable scripts and documentation,
+while generated data and experimental artifacts should be shared separately.
+
+---
+
+# License
+
+See [`LICENSE`](LICENSE) for the repository license.
