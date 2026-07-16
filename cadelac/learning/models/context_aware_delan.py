@@ -102,6 +102,8 @@ class ContextAwareDeLaN(nn.Module):
         # Use general values if not defined
         kwargs_inertia = copy.deepcopy(kwargs)
         kwargs_pot = copy.deepcopy(kwargs)
+#changed 1
+        kwargs_mlp = copy.deepcopy(kwargs)
 
         self.net_arch_inertia = None
         self.net_arch_inertia = kwargs.get("net_arch_inertia", self.net_arch_inertia)
@@ -111,6 +113,12 @@ class ContextAwareDeLaN(nn.Module):
         self.net_arch_pot = kwargs.get("net_arch_pot", self.net_arch_pot)
         kwargs_pot["net_arch"] = self.net_arch_pot
 
+#changed 2
+        # Configuration for the direct torque MLP
+        self.net_arch_mlp = kwargs.get("net_arch_mlp", [30, 20]) #model architecture (searches for hyperparameters or defaults to defined)
+        kwargs_mlp["net_arch"] = self.net_arch_mlp #fix naming convention for class ComponentNN
+        kwargs_mlp["init_tf"] = False #we do not need sin cos conversion as we use q_dot, q_ddot
+
         # Compute non-zero elements of L:
         self.l_output_size = int((self.n_dof ** 2 + self.n_dof) / 2)
         self.l_diag_size = self.n_dof
@@ -118,6 +126,9 @@ class ContextAwareDeLaN(nn.Module):
 
         self.inertia_net = ComponentNN(self.n_dof, self.l_output_size, **kwargs_inertia)
         self.potential_net = ComponentNN(self.n_dof, 1, **kwargs_pot)
+#changed 3
+        self.torque_net = ComponentNN(3 * self.n_dof, self.n_dof, **kwargs_mlp) #the actual model PARAMS: input dim, output dim
+
         if self.hist_length > 0:
             self.lstm = LSTMModel(self.n_lstm_input, self.n_lstm_hidden, self.n_enc_input, self.n_lstm_depth)
 
@@ -142,9 +153,9 @@ class ContextAwareDeLaN(nn.Module):
             self.act_ld = torch.nn.Softplus(self.softplus_beta)
         elif self.act_ld_name == 'ReLu':
             self.act_ld = torch.nn.ReLU()
-
-        self.dyn_model = self.dyn_model_hessian
-    
+#changed 5 to use our mlp model
+       # self.dyn_model = self.dyn_model_hessian
+        self.dyn_model = self.dyn_model_mlp
         # Define vmap methods
         if self.n_enc_input == 1:
             self.vmap_jacfwd_lower_tri_inertia = torch.func.vmap(torch.func.jacfwd(self.lower_tri_inertia_fn, argnums=0, has_aux=True), in_dims=(0, None))
@@ -240,6 +251,15 @@ class ContextAwareDeLaN(nn.Module):
         dEdt = torch.sum(qd * tau_pred, dim=1)
 
         return tau_pred, dEdt
+
+#changed 4  MLP implementation
+    def dyn_model_mlp(self, q, qd, qdd, enc_input=None):
+        mlp_input = torch.cat((q, qd, qdd), dim=-1) #conects tensors along one dimension
+        tau_pred = self.torque_net(mlp_input, enc_input) # the returned tau is predicted by the MLP (mlp input: 6 + z 10 = 16dim vector getting put into MLP) OUTPUT: 2 dim
+        dEdt = torch.sum(qd * tau_pred, dim=1) #only used to get dEdt mechanical torque for fitting return value amount (2) of forward. As loss_power = false this is unused
+
+        return tau_pred, dEdt
+
 
     def forward(self, q, qd, qdd, lstm_input = None):
         if self.hist_length == 0:
