@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+import argparse
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+
+REPO_DIR = Path(__file__).resolve().parent
+MODEL_DIR = REPO_DIR / "cadelac" / "learning" / "trained_models" / "res_model" / "panda" / "ContextA
+
+def resolve_model(model_arg: str) -> Path:
+    model = Path(model_arg)
+
+    # If user passes full/relative path, use it.
+    if model.parent != Path("."):
+        model_path = (REPO_DIR / model).resolve() if not model.is_absolute() else model
+    else:
+        # If user only passes the filename, resolve it inside the standard ContextAware model dir.
+        model_path = MODEL_DIR / model_arg
+
+    if not model_path.exists():
+        raise FileNotFoundError(f"Model not found: {model_path}")
+
+    return model_path
+
+
+def infer_epoch(model_path: Path) -> str:
+    match = re.search(r"epochs_(\d+)", model_path.name)
+    if match:
+        return match.group(1)
+
+    match = re.match(r"(\d+)_", model_path.name)
+    if match:
+        return match.group(1)
+
+    return "custom"
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "model",
+        nargs="?",
+        default=DEFAULT_MODEL_NAME,
+        help=(
+            "Model filename or path. If only a filename is given, it is resolved inside "
+            "cadelac/learning/trained_models/res_model/panda/ContextAware/."
+        ),
+    )
+    args = parser.parse_args()
+
+    if os.environ.get("CONDA_DEFAULT_ENV") != "cadelac":
+        print("Please activate the environment first:")
+        print("conda activate cadelac")
+        sys.exit(1)
+
+    model_path = resolve_model(args.model)
+    epoch = infer_epoch(model_path)
+
+    run_name = f"hist15_{epoch}"
+
+    torque_zoom_dir = f"logs/torque_zoom_{run_name}"
+    grid_dir = f"logs/left_leg_torque_grid_{run_name}"
+
+    eval_log = f"logs/exo_context_{run_name}_eval.log"
+    zoom_full_log = f"logs/exo_context_{run_name}_zoom_full.log"
+    zoom_ball_log = f"logs/exo_context_{run_name}_zoom_ball_toss.log"
+    zoom_incline_log = f"logs/exo_context_{run_name}_zoom_incline_walk.log"
+    grid_ball_log = f"logs/exo_context_{run_name}_grid_ball_toss.log"
+    grid_incline_log = f"logs/exo_context_{run_name}_grid_incline_walk.log"
+
+    script = f'''
+set -euo pipefail
+
+cd "{REPO_DIR}"
+
+mkdir -p logs
+mkdir -p "{torque_zoom_dir}"
+mkdir -p "{grid_dir}"
+
+MODEL="{model_path}"
+
+ls -lh "$MODEL"
+
+python -u -m cadelac.learning.train_panda \\
+  -l 1 \\
+  -f 0 \\
+  -m 0 \\
+  -r 0 \\
+  -c 0 \\
+  2>&1 | tee "{eval_log}"
+
+python plot_zoomed_context_torque_prediction.py \\
+  --model "$MODEL" \\
+  --output-dir "{torque_zoom_dir}" \\
+  2>&1 | tee "{zoom_full_log}"
+
+python plot_zoomed_context_torque_prediction.py \\
+  --model "$MODEL" \\
+  --segment ball_toss \\
+  --output-dir "{torque_zoom_dir}" \\
+  2>&1 | tee "{zoom_ball_log}"
+
+python plot_zoomed_context_torque_prediction.py \\
+  --model "$MODEL" \\
+  --segment incline_walk \\
+  --output-dir "{torque_zoom_dir}" \\
+  2>&1 | tee "{zoom_incline_log}"
+
+python plot_left_leg_torque_grid.py \\
+  --model "$MODEL" \\
+  --movement ball_toss \\
+  --output-dir "{grid_dir}" \\
+  2>&1 | tee "{grid_ball_log}"
+
+python plot_left_leg_torque_grid.py \\
+  --model "$MODEL" \\
+  --movement incline_walk \\
+  --output-dir "{grid_dir}" \\
+  2>&1 | tee "{grid_incline_log}"
+
+PKG="$HOME/Desktop/ip_cadelac_{run_name}_eval_package_$(date +%Y%m%d_%H%M)"
+mkdir -p "$PKG"
+
+echo "Creating package:"
+echo "$PKG"
+
+mkdir -p "$PKG/logs"
+cp -v logs/exo_context_{run_name}*.log "$PKG/logs/" 2>/dev/null || true
+
+mkdir -p "$PKG/{torque_zoom_dir}"
+cp -v "{torque_zoom_dir}"/* "$PKG/{torque_zoom_dir}/" 2>/dev/null || true
+
+mkdir -p "$PKG/{grid_dir}"
+cp -v "{grid_dir}"/* "$PKG/{grid_dir}/" 2>/dev/null || true
+
+mkdir -p "$PKG/cadelac/learning/trained_models/res_model/panda/ContextAware"
+cp -v "$MODEL" "$PKG/cadelac/learning/trained_models/res_model/panda/ContextAware/"
+
+mkdir -p "$PKG/scripts"
+cp -v cadelac/learning/train_panda.py "$PKG/scripts/"
+cp -v plot_zoomed_context_torque_prediction.py "$PKG/scripts/" 2>/dev/null || true
+cp -v plot_left_leg_torque_grid.py "$PKG/scripts/" 2>/dev/null || true
+cp -v run_context_eval_package.py "$PKG/scripts/" 2>/dev/null || true
+
+{{
+  echo "IP CaDeLaC hist15 {epoch} evaluation package"
+  echo "Created: $(date)"
+  echo
+  echo "Model:"
+  echo "$MODEL"
+  echo
+  echo "Expected setup:"
+  echo "hist_length = 15"
+  echo "n_lstm_input = 6"
+  echo "LSTM input = q_history + qdot_history + tau_history"
+  echo "Train/Test split: train = non-BT24, test = BT24"
+  echo
+  echo "Files:"
+  find "$PKG" -type f | sort
+}} > "$PKG/README_package_contents.txt"
+
+cat "$PKG/README_package_contents.txt"
+
+cd "$HOME/Desktop"
+zip -r "$(basename "$PKG").zip" "$(basename "$PKG")"
+
+echo
+echo "Done:"
+echo "$PKG"
+echo "$PKG.zip"
+'''
+
+    subprocess.run(["bash", "-lc", script], check=True)
+
+
+if __name__ == "__main__":
+    main()
