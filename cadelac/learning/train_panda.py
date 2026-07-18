@@ -50,8 +50,10 @@ if __name__ == "__main__":
 
     ## LSTM parameters
     hist_length = 15 if (nn_id == "ContextAware" and not full_model) else 0
+# Torque histories remain in the dataset loader but are not passed to the LSTM.
     hist_labels = ['qp', 'qv', 'tau', 'diff_tau']
-    n_lstm_input = n_dof * 3
+#change 2.1 as we need to remove tau Dim
+    n_lstm_input = n_dof * 2
     n_lstm_hidden = 10
     n_lstm_output = 10
     n_lstm_depth = 5
@@ -93,10 +95,30 @@ if __name__ == "__main__":
                      tain_hist_qp, tain_hist_qv, tain_hist_tau, tain_hist_diff_tau_nom = train_data
         test_labels, test_qp, test_qv, test_qa, test_tau, test_m, test_c, test_g, \
                      test_hist_qp, test_hist_qv, test_hist_tau, test_hist_diff_tau_nom = test_data
-# changed to diff_tau = tau   
-        train_lstm_input = np.concatenate((tain_hist_qp, tain_hist_qv, tain_hist_tau), axis=-1)
-        test_lstm_input = np.concatenate((test_hist_qp, test_hist_qv, test_hist_tau), axis=-1)
+# changed to diff_tau = tau
+# change 2.2 
+       # train_lstm_input = np.concatenate((tain_hist_qp, tain_hist_qv, tain_hist_tau), axis=-1)
+       # test_lstm_input = np.concatenate((test_hist_qp, test_hist_qv, test_hist_tau), axis=-1)
+       # n_enc_input = n_lstm_output
+        train_lstm_input = np.concatenate((tain_hist_qp, tain_hist_qv), axis=-1)
+        test_lstm_input = np.concatenate((test_hist_qp, test_hist_qv), axis=-1)
+#change 2.4 safty asserts to check that no 3 dim input gets into LSTM
+        assert train_lstm_input.shape[-1] == n_lstm_input, (
+            f"Expected training LSTM input dimension {n_lstm_input}, "
+            f"got {train_lstm_input.shape[-1]}."
+        )
+
+        assert test_lstm_input.shape[-1] == n_lstm_input, (
+            f"Expected test LSTM input dimension {n_lstm_input}, "
+            f"got {test_lstm_input.shape[-1]}."
+        )
+
         n_enc_input = n_lstm_output
+
+
+# LSTM history:
+# [q(t-hist_length), qdot(t-hist_length), ..., q(t-1), qdot(t-1)]
+# Historical torques are deliberately excluded from the model input.
 
 # changed safety assert for not using BT24 in Training
     assert not any("BT24" in label for label in train_labels), "BT24 leaked into training labels."
@@ -140,8 +162,8 @@ if __name__ == "__main__":
              'act_ld': 'Softplus',
              'max_epoch': 1000
             }
-
-    model_name = 'mlp_lstm_epochs_' + str(hyper['max_epoch'])
+#change 2.3 model name
+    model_name = 'mlp_lstm_notau_epochs_' + str(hyper['max_epoch'])
     if add_noise_to_load_data:
         model_name += '_noise_'
     model_name += dataset_name + '.torch'
