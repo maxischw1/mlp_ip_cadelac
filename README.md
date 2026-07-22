@@ -305,165 +305,200 @@ python -m cadelac.ros.cadelac_node -c 2
 
 # Exoskeleton Extension
 
-## Research Goal
+This fork extends the original CaDeLaC repository with a simplified 2-DOF
+hip-knee exoskeleton experiment.
 
-The exoskeleton extension investigates whether a single learned dynamics model can
-adapt its joint-torque prediction to an unseen human subject.
+The currently active experimental architecture combines:
 
-The current experimental question is:
+- an LSTM that estimates a latent context vector from motion history,
+- a direct torque MLP with four hidden layers of 64 neurons,
+- subject-wise evaluation on the unseen participant BT24.
 
-> Can an LSTM infer a latent user and task context from recent motion history and
-> enable a direct MLP to predict hip and knee torque for an unseen participant?
+The currently configured direct torque network is:
 
-The model is trained on non-BT24 recordings and evaluated on BT24 recordings.
-
-The BT24 test set contains:
-
-- `ball_toss` movement segments,
-- `incline_walk` movement segments.
-
-This implements a subject-wise generalization experiment rather than a random
-sample-level train/test split.
-
----
-
-## Architecture
-
-The current architecture contains two active learned components:
-
-1. **Context LSTM**
-   - processes a fixed history window,
-   - outputs a latent context vector \(z\).
-
-2. **Direct Torque MLP**
-   - receives the current position, velocity and acceleration,
-   - receives the latent context \(z\),
-   - directly predicts hip and knee torque.
-
-```mermaid
-flowchart LR
-    H["History window<br/>q history, q̇ history, τ history"]
-    LSTM["LSTM context encoder"]
-    Z["Latent context z"]
-
-    Q["Current q"]
-    QD["Current q̇"]
-    QDD["Current q̈"]
-
-    CAT["Concatenation"]
-    MLP["Direct torque MLP<br/>16 → 30 → 20 → 2"]
-    TAU["Predicted torque τ̂<br/>hip and knee"]
-
-    H --> LSTM
-    LSTM --> Z
-
-    Q --> CAT
-    QD --> CAT
-    QDD --> CAT
-    Z --> CAT
-
-    CAT --> MLP
-    MLP --> TAU
+```text
+16 -> 64 -> 64 -> 64 -> 64 -> 2
 ```
 
-Mathematically, the active prediction path is:
+The two outputs represent the predicted left hip and left knee torque.
 
-\[
-z_t =
-\operatorname{LSTM}
-\left(
-x_{t-h:t-1}
-\right)
-\]
-
-\[
-\hat{\tau}_t =
-\operatorname{MLP}
-\left(
-q_t,
-\dot q_t,
-\ddot q_t,
-z_t
-\right)
-\]
-
-where \(h\) denotes the history length.
+> [!IMPORTANT]
+> The current direct torque MLP is a black-box baseline and does not use the
+> physics-consistent Hessian-based DeLaN prediction path.
 
 ---
 
-## Implementation
+## Current Architecture
 
-The architecture is implemented in:
+The model implementation is located in:
 
 ```text
 cadelac/learning/models/context_aware_delan.py
 ```
 
-The direct torque network is created through the existing `ComponentNN` class:
+The current TensorBoard-enabled training configuration is located in:
 
-```python
-self.torque_net = ComponentNN(
-    3 * self.n_dof,
-    self.n_dof,
-    **kwargs_mlp
-)
+```text
+cadelac/learning/train_panda_v2.py
 ```
 
-The current state input is constructed as:
+For every sample, the model uses:
 
-```python
-state_input = torch.cat((q, qd, qdd), dim=-1)
+```text
+History:
+15 previous timesteps of q and qdot
+
+Current state:
+q, qdot and qddot
+
+Target:
+measured hip and knee torque
 ```
 
-The latent context is appended inside `ComponentNN`, and the torque is predicted by:
+The data flow is:
 
-```python
-tau_pred = self.torque_net(state_input, enc_input)
+```text
+15 x [q_hip, q_knee, qdot_hip, qdot_knee]
+                         |
+                         v
+                       LSTM
+                         |
+                         v
+                latent context z
+                    10 values
+                         |
+                         +-------------------------+
+                                                   |
+Current state:                                     |
+[q_hip, q_knee,                                    |
+ qdot_hip, qdot_knee,                              |
+ qddot_hip, qddot_knee]                            |
+         |                                         |
+         +-----------------------------------------+
+                         |
+                         v
+        [q, qdot, qddot, z] = 16 values
+                         |
+                         v
+          16 -> 64 -> 64 -> 64 -> 64 -> 2
+                         |
+                         v
+       predicted hip and knee torque
 ```
 
-The active dynamics method is selected through:
+### Current Model Settings
+
+| Parameter | Current value |
+|---|---:|
+| Degrees of freedom | `2` |
+| Modeled joints | left hip and left knee |
+| History length | `15` timesteps |
+| LSTM history features | `q` and `qdot` |
+| LSTM input dimension | `4` per timestep |
+| LSTM hidden dimension | `10` |
+| LSTM depth | `5` layers |
+| Context dimension | `10` |
+| Current-state dimension | `6` |
+| Complete MLP input dimension | `16` |
+| MLP architecture | `[64, 64, 64, 64]` |
+| MLP output dimension | `2` |
+| Hidden activation | `Tanh` |
+| Artificial data noise | disabled |
+| Power loss | disabled |
+| Held-out subject | `BT24` |
+
+---
+
+## Current Assumptions and Limitations
+
+The current experimental setup makes the following assumptions:
+
+- only the left hip and left knee are modeled,
+- the measured joint moments are used as torque targets,
+- the current torque is not used as a neural-network input,
+- historical torque values are not passed to the LSTM,
+- only historical `q` and `qdot` values are used to estimate the context,
+- the current `q`, `qdot` and `qddot` values are passed directly to the MLP,
+- all BT24 samples are excluded from training,
+- BT24 is used only for subject-wise evaluation,
+- artificial noise is disabled because the dataset already contains real
+  measurement noise,
+- the direct MLP receives raw state values,
+- the sine/cosine input transformation is disabled for the direct MLP,
+- the torque loss is normalized using the torque variance of the training set.
+
+The existing data loader still creates and returns torque histories because its
+interface is shared with the original CaDeLaC pipeline. These torque histories
+are currently not passed to the LSTM.
+
+For the simplified residual setup:
+
+```python
+diff_tau = tau
+```
+
+The residual target used by the existing training pipeline is therefore equal
+to the measured torque.
+
+---
+
+## Legacy DeLaN Components
+
+The class `ContextAwareDeLaN` still constructs the original:
+
+- inertia network,
+- potential-energy network,
+- direct torque network.
+
+The active model path is selected through:
 
 ```python
 self.dyn_model = self.dyn_model_mlp
 ```
 
-The original Hessian-based DeLaN implementation remains in the class for
-compatibility and comparison, but it is not used by the active direct-torque
-forward path.
-
----
-
-## Current Configuration
-
-| Parameter | Value | Description |
-|---|---:|---|
-| Degrees of freedom | `2` | Left hip and left knee |
-| History length | `15` | Number of previous timesteps |
-| LSTM input size | `6` | \(q\), \(\dot q\), and \(\tau\) for two joints |
-| LSTM hidden size | `10` | Hidden-state dimension |
-| LSTM depth | `5` | Number of recurrent layers |
-| Context dimension | `10` | Dimension of latent vector \(z\) |
-| State input size | `6` | \(q\), \(\dot q\), and \(\ddot q\) |
-| Complete MLP input | `16` | Six state values plus ten context values |
-| MLP hidden layers | `[30, 20]` | Feedforward hidden-layer sizes |
-| MLP output size | `2` | Hip and knee torque |
-| MLP activation | `Tanh` | Hidden-layer activation |
-| MLP trigonometric transform | Disabled | Raw state values are used |
-| Maximum epochs | `3000` | Current full training configuration |
-| Artificial data noise | Disabled | Real measurements already contain noise |
-
-The two output dimensions represent:
+Therefore, the current torque prediction uses only:
 
 ```text
-Joint 0: left hip torque
-Joint 1: left knee torque
+LSTM context encoder
++
+direct torque MLP
+```
+
+The inertia and potential-energy networks are still instantiated for
+compatibility with the original implementation.
+
+As a result, these inactive components may still:
+
+- appear in the total parameter count,
+- appear in the model `state_dict`,
+- be stored in checkpoints and final model files.
+
+They are not used to calculate the active `tau_pred` output and do not receive
+gradients through the direct-torque prediction path.
+
+The current MLP also does not enforce a physical decomposition into:
+
+```text
+inertial torque
+Coriolis and centrifugal torque
+gravitational torque
+```
+
+Legacy evaluation code may still calculate apparent component values by setting
+selected inputs to zero. These values are not guaranteed to represent a
+physically valid DeLaN decomposition.
+
+The primary valid output of the current baseline is therefore:
+
+```text
+predicted total hip and knee torque
 ```
 
 ---
 
 # Dataset Preparation
 
-Dataset scripts are stored in:
+Dataset-generation scripts are located in:
 
 ```text
 scripts/data/
@@ -475,57 +510,47 @@ Generated datasets are written to:
 cadelac/learning/datasets/panda/
 ```
 
----
-
 ## `scripts/data/make_exo_pkl.py`
 
-Creates a simple single-left-leg 2-DOF dataset from:
+Creates a basic single-recording 2-DOF exoskeleton dataset from matching:
 
 ```text
-~/Downloads/Exo.csv
-~/Downloads/Joint_Moments_Filt.csv
+Exo.csv
+Joint_Moments_Filt.csv
 ```
 
 The script:
 
-- extracts left hip and knee joint positions,
-- extracts or derives joint velocities,
-- computes joint accelerations,
-- reads filtered joint moments,
-- converts angles from degrees to radians,
-- splits the recording into trajectory segments,
-- writes the format expected by the CaDeLaC training pipeline.
+- reads left hip and knee angles,
+- reads or derives joint velocities,
+- calculates joint accelerations,
+- reads filtered hip and knee moments,
+- converts angular values from degrees to radians,
+- writes the data in the format expected by the training pipeline.
 
-Run:
+Run from the repository root:
 
 ```bash
 python scripts/data/make_exo_pkl.py
-```
-
-Primary output:
-
-```text
-cadelac/learning/datasets/panda/exo_hip_knee_delan_2dof_left_only.pkl
 ```
 
 ---
 
 ## `scripts/data/make_all_exo_pkls.py`
 
-Creates the main all-trials exoskeleton datasets.
-
-Expected source directory:
-
-```text
-~/Downloads/codeocean_exo_data
-```
-
-The script searches recursively for matching:
+Searches the configured source directory recursively for matching:
 
 ```text
 Exo.csv
 Joint_Moments_Filt.csv
 ```
+
+The script:
+
+- creates left-leg and right-leg datasets,
+- segments longer recordings into shorter trials,
+- creates the Context-Aware dataset,
+- sets `diff_tau` equal to the measured torque.
 
 Run:
 
@@ -533,43 +558,25 @@ Run:
 python scripts/data/make_all_exo_pkls.py
 ```
 
-Generated files include:
+The current training configuration uses:
 
 ```text
-cadelac/learning/datasets/panda/exo_hip_knee_delan_2dof_left_all_trials.pkl
-cadelac/learning/datasets/panda/exo_hip_knee_delan_2dof_right_all_trials.pkl
-cadelac/learning/datasets/panda/exo_hip_knee_delan_2dof_left_all_trials_context.pkl
+cadelac/learning/datasets/panda/
+exo_hip_knee_delan_2dof_left_all_trials_context.pkl
 ```
-
-The current LSTM-plus-MLP experiment uses:
-
-```text
-cadelac/learning/datasets/panda/exo_hip_knee_delan_2dof_left_all_trials_context.pkl
-```
-
-Filtered joint moments from `Joint_Moments_Filt.csv` are used as torque targets.
-
-For the simplified Context-Aware experiment:
-
-```python
-diff_tau = tau
-```
-
-This means that the residual target handled by the existing training pipeline is
-equal to the measured torque target.
 
 ---
 
 ## `scripts/data/fix_exo_pkl_time.py`
 
-Repairs the time axis of a generated exoskeleton dataset and recomputes
-accelerations from velocity.
+Repairs inconsistent time information in an existing generated dataset.
 
-The intended fixed timestep is:
+The script can:
 
-```python
-dt = 0.005  # 200 Hz
-```
+- replace an invalid or nonuniform time axis,
+- enforce the intended sampling interval,
+- recompute joint accelerations from joint velocities,
+- create a backup of the original dataset.
 
 Run:
 
@@ -577,51 +584,46 @@ Run:
 python scripts/data/fix_exo_pkl_time.py
 ```
 
-The script creates a backup before modifying its target dataset.
-
 > [!CAUTION]
-> Use this script only when the generated dataset contains nonuniform or
-> inconsistent timestamp information.
+> Use this script only when the generated dataset contains inconsistent or
+> incorrect timestamp information.
 
 ---
 
 # Training
 
-The main training implementation is:
+## `cadelac/learning/train_panda.py`
 
-```text
-cadelac/learning/train_panda.py
-```
+This is the earlier training entry point retained for compatibility with the
+existing CaDeLaC workflow.
 
-The direct torque MLP architecture is configured through:
-
-```python
-"net_arch_mlp": [30, 20]
-```
-
-The final model uses the following filename pattern:
-
-```text
-mlp_lstm_epochs_<epochs>exo_hip_knee_delan_2dof_left_all_trials_context.torch
-```
-
-The 3000-epoch model is stored at:
-
-```text
-cadelac/learning/trained_models/res_model/panda/ContextAware/
-└── mlp_lstm_epochs_3000exo_hip_knee_delan_2dof_left_all_trials_context.torch
-```
+It uses the same `ContextAwareDeLaN` model class, but its hyperparameters and
+training duration are configured separately from `train_panda_v2.py`.
 
 ---
 
-## Full GPU Training
+## `cadelac/learning/train_panda_v2.py`
 
-From the repository root:
+This is the current TensorBoard-enabled training script.
+
+It performs the following steps:
+
+1. loads the Context-Aware exoskeleton dataset,
+2. identifies all labels containing `BT24`,
+3. excludes BT24 from the training data,
+4. creates 15-timestep `q` and `qdot` history windows,
+5. creates the current `q`, `qdot`, `qddot` state,
+6. trains the LSTM and direct torque MLP,
+7. evaluates the current model on BT24,
+8. logs metrics to TensorBoard,
+9. saves checkpoints and the final model.
+
+Start a new training run from the repository root:
 
 ```bash
-mkdir -p logs
+mkdir -p logs runs
 
-python -m cadelac.learning.train_panda \
+python -u -m cadelac.learning.train_panda_v2 \
   -c 1 \
   -i 0 \
   -s 0 \
@@ -629,168 +631,107 @@ python -m cadelac.learning.train_panda \
   -l 0 \
   -m 1 \
   -f 0 \
-  2>&1 | tee "logs/mlp_lstm_train_3000_$(date +%Y%m%d_%H%M).log"
+  --tb-eval-period 10 \
+  --tb-histogram-period 1000 \
+  2>&1 | tee logs/train_panda_v2.log
 ```
 
 ### Training Arguments
 
 | Argument | Meaning |
 |---:|---|
-| `-c 1` | Use CUDA when available |
-| `-i 0` | Use CUDA device 0 |
-| `-s 0` | Use random seed 0 |
-| `-r 0` | Disable interactive plot rendering |
-| `-l 0` | Start a new model instead of loading one |
-| `-m 1` | Save checkpoints and the final model |
-| `-f 0` | Use the Context-Aware residual branch |
+| `-c 1` | use CUDA when available |
+| `-i 0` | use CUDA device `0` |
+| `-s 0` | use random seed `0` |
+| `-r 0` | disable interactive plot rendering |
+| `-l 0` | start a new model |
+| `-m 1` | save checkpoints and the final model |
+| `-f 0` | use the Context-Aware residual branch |
+| `--tb-eval-period 10` | evaluate BT24 every 10 epochs |
+| `--tb-histogram-period 1000` | log parameter histograms periodically |
 
-> [!IMPORTANT]
-> Use `-l 0` for new training.  
-> The load-model path is intended for evaluation of an existing checkpoint.
-
----
-
-## Training Wrapper
-
-The existing wrapper can also be used:
-
-```bash
-bash scripts/training/train_exo_context_current_config.sh
-```
-
-It executes the current configuration stored in `train_panda.py`.
-
-The corresponding log is written to:
+Models and checkpoints are stored below:
 
 ```text
-logs/exo_context_current_config_train.log
+cadelac/learning/trained_models/res_model/panda/ContextAware/
 ```
 
 ---
 
-## Evaluate the Current Model Through `train_panda.py`
+# TensorBoard
 
-```bash
-python -m cadelac.learning.train_panda \
-  -l 1 \
-  -f 0 \
-  -m 0 \
-  -r 0 \
-  -c 0
+TensorBoard event files are written to:
+
+```text
+runs/
 ```
 
-This loads the configured model, evaluates the BT24 split and generates the
-legacy `plot_torques` output.
+Start TensorBoard from the repository root:
+
+```bash
+tensorboard --logdir runs --port 6006
+```
+
+Then open:
+
+```text
+http://localhost:6006
+```
+
+The main training and evaluation metrics are:
+
+```text
+Loss/train_torque_normalized
+Loss/BT24_torque_normalized
+```
+
+Additional metrics include:
+
+```text
+Train/normalized_hip_mse
+Train/normalized_knee_mse
+
+BT24/normalized_hip_mse
+BT24/normalized_knee_mse
+
+BT24/raw_hip_mse
+BT24/raw_knee_mse
+
+Context/BT24_z_mean
+Context/BT24_z_std
+
+Timing/seconds_per_epoch
+Optimization/learning_rate
+```
+
+The training loss is written after every epoch.
+
+The BT24 loss is written according to:
+
+```text
+--tb-eval-period
+```
+
+When multiple TensorBoard runs are selected, TensorBoard displays one training
+and one BT24 curve for every selected model.
 
 ---
 
 # Evaluation
 
-Evaluation scripts are stored in:
+Evaluation scripts are located in:
 
 ```text
 scripts/evaluation/
 ```
 
-The existing evaluation pipeline is reused for the direct torque MLP because the
-public model interface remains:
-
-```python
-tau_pred, dEdt = model(q, qd, qdd, lstm_input)
-```
-
-The direct MLP therefore remains compatible with the existing torque plotting
-and metric scripts.
-
----
-
-## Complete Evaluation Package
-
-The recommended entry point is:
-
-```text
-run_context_eval_package.py
-```
-
-Set the trained model:
+Set the model that should be evaluated:
 
 ```bash
-MODEL_PATH="$PWD/cadelac/learning/trained_models/res_model/panda/ContextAware/mlp_lstm_epochs_3000exo_hip_knee_delan_2dof_left_all_trials_context.torch"
+MODEL_PATH="<path-to-model.torch>"
 ```
 
-Run the full pipeline:
-
-```bash
-python run_context_eval_package.py "$MODEL_PATH"
-```
-
-The runner executes:
-
-1. the full BT24 model evaluation,
-2. a complete BT24 torque plot,
-3. a `ball_toss` torque plot,
-4. an `incline_walk` torque plot,
-5. a left-leg `ball_toss` torque grid,
-6. a left-leg `incline_walk` torque grid,
-7. metric CSV generation,
-8. log collection,
-9. Desktop ZIP creation.
-
----
-
-## Evaluation Outputs
-
-The MLP-specific output directories are:
-
-```text
-logs/torque_zoom_mlp_hist15_3000/
-logs/left_leg_torque_grid_mlp_hist15_3000/
-```
-
-Typical generated files include:
-
-```text
-exo_context_zoomed_torque_full_BT24.png
-exo_context_zoomed_torque_full_BT24_metrics.csv
-
-exo_context_zoomed_torque_ball_toss.png
-exo_context_zoomed_torque_ball_toss_metrics.csv
-
-exo_context_zoomed_torque_incline_walk.png
-exo_context_zoomed_torque_incline_walk_metrics.csv
-
-BT24_left_ball_toss_torque_grid.png
-BT24_left_ball_toss_torque_grid_metrics.csv
-
-BT24_left_incline_walk_torque_grid.png
-BT24_left_incline_walk_torque_grid_metrics.csv
-```
-
-The Desktop package follows the naming pattern:
-
-```text
-mlp_ip_cadelac_mlp_hist15_3000_eval_outputs_<timestamp>.zip
-```
-
-The ZIP intentionally contains only evaluation artifacts:
-
-- generated graphics,
-- metric CSV files,
-- training and evaluation logs,
-- a package-content summary.
-
-It does **not** contain:
-
-- the trained checkpoint,
-- the dataset,
-- the repository source code,
-- temporary Python files.
-
----
-
-## Individual Evaluation Scripts
-
-### Checkpoint Metrics
+## Checkpoint Evaluation
 
 Evaluate available Context-Aware checkpoints:
 
@@ -798,182 +739,94 @@ Evaluate available Context-Aware checkpoints:
 python scripts/evaluation/evaluate_context_checkpoints.py
 ```
 
-Generated metric file:
-
-```text
-logs/exo_context_checkpoint_metrics.csv
-```
-
-Plot the checkpoint metrics:
+Plot the generated checkpoint metrics:
 
 ```bash
 python scripts/evaluation/plot_context_checkpoint_metrics.py
 ```
 
-Generated figures:
-
-```text
-logs/exo_context_torque_mse_over_epochs.png
-logs/exo_context_torque_rmse_over_epochs.png
-```
-
 ---
 
-### Full BT24 Torque Plot
+## Torque Prediction Plot
+
+Create a measured-versus-predicted torque plot:
 
 ```bash
 python scripts/evaluation/plot_zoomed_context_torque_prediction.py \
   --model "$MODEL_PATH" \
-  --output-dir logs/torque_zoom_mlp_hist15_3000
+  --output-dir <output-directory>
 ```
 
-### Ball-Toss Torque Plot
+Evaluate only Ball Toss:
 
 ```bash
 python scripts/evaluation/plot_zoomed_context_torque_prediction.py \
   --model "$MODEL_PATH" \
   --segment ball_toss \
-  --output-dir logs/torque_zoom_mlp_hist15_3000
+  --output-dir <output-directory>
 ```
 
-### Incline-Walk Torque Plot
+Evaluate only Incline Walk:
 
 ```bash
 python scripts/evaluation/plot_zoomed_context_torque_prediction.py \
   --model "$MODEL_PATH" \
   --segment incline_walk \
-  --output-dir logs/torque_zoom_mlp_hist15_3000
+  --output-dir <output-directory>
 ```
 
-### Ball-Toss Torque Grid
+---
+
+## Left-Leg Torque Grid
+
+Create a Ball-Toss torque grid:
 
 ```bash
 python scripts/evaluation/plot_left_leg_torque_grid.py \
   --model "$MODEL_PATH" \
   --movement ball_toss \
-  --output-dir logs/left_leg_torque_grid_mlp_hist15_3000
+  --output-dir <output-directory>
 ```
 
-### Incline-Walk Torque Grid
+Create an Incline-Walk torque grid:
 
 ```bash
 python scripts/evaluation/plot_left_leg_torque_grid.py \
   --model "$MODEL_PATH" \
   --movement incline_walk \
-  --output-dir logs/left_leg_torque_grid_mlp_hist15_3000
+  --output-dir <output-directory>
 ```
 
 ---
 
-# Recorded Results
+# Interpreting the Results
 
-The following values were reported by the completed 3000-epoch run:
+The main model comparison should use:
 
-| Metric | Recorded value |
-|---|---:|
-| Training samples | `41,224` |
-| Total reported parameters | `7,746` |
-| LSTM parameters | `4,350` |
-| Reported MLP parameters | `3,396` |
-| Training epochs | `3,000` |
-| Total training time | `450.2 s` |
-| Final training loss | `5.225e-04` |
-| Final inverse-dynamics loss | `5.225e-04` |
-| Reported torque MSE | `1.436e-03` |
-| Reported power MSE | `1.693e-04` |
+- normalized training torque loss,
+- normalized BT24 torque loss,
+- separate hip and knee errors,
+- measured-versus-predicted torque plots,
+- movement-specific evaluation plots.
 
-The model was trained on BT23 movement segments and evaluated on unseen BT24
-`ball_toss` and `incline_walk` segments.
+A decreasing training loss indicates that the model is fitting the training
+participants.
 
-> [!NOTE]
-> The displayed loss values are batch- and normalization-dependent. Comparisons
-> should use the same dataset split, normalization and evaluation scripts.
+A decreasing BT24 loss indicates improved generalization to the unseen BT24
+participant.
 
----
+When the training loss decreases while the BT24 loss remains constant or
+increases, the model may be overfitting to the training participants.
 
-# Interpretation and Limitations
+Individual completed training runs and their numerical results are
+intentionally not documented in this README. Training-specific results should
+instead be inspected through:
 
-## Primary Valid Output
-
-The physically relevant primary output of the direct MLP is:
-
-```text
-predicted total residual torque
-```
-
-The main comparisons should therefore use:
-
-- measured versus predicted torque,
-- total torque MSE,
-- total torque RMSE,
-- joint-wise hip and knee errors,
-- movement-specific Ball-Toss and Incline-Walk plots.
-
----
-
-## No Explicit Physical Torque Decomposition
-
-The direct torque MLP does not explicitly learn:
-
-\[
-H(q)\ddot q
-\]
-
-\[
-c(q,\dot q)
-\]
-
-\[
-g(q)
-\]
-
-as separately identifiable physical components.
-
-Legacy evaluation code may still calculate apparent inertia, Coriolis and gravity
-terms by setting selected MLP inputs to zero. These values are not guaranteed to
-represent a physically valid decomposition.
-
-They should therefore not be interpreted in the same way as the corresponding
-terms produced by a physics-consistent DeLaN.
-
----
-
-## Power Output
-
-The model retains the interface:
-
-```python
-return tau_pred, dEdt
-```
-
-with:
-
-```python
-dEdt = torch.sum(qd * tau_pred, dim=1)
-```
-
-This keeps the direct MLP compatible with the existing training and evaluation
-pipeline.
-
-For the direct black-box MLP, this value represents mechanical power computed
-from predicted torque. It does not independently prove energy conservation.
-
----
-
-## Legacy Components
-
-The original inertia and potential networks remain in
-`ContextAwareDeLaN` for compatibility and comparison.
-
-The active direct-torque path does not use them to compute `tau_pred`.
-
-Consequently:
-
-- inactive legacy parameters may still appear in total parameter counts,
-- model checkpoints may contain inactive DeLaN parameters,
-- the current implementation prioritizes a minimal and reversible code change.
-
-A future cleanup may separate the direct MLP into a dedicated model class.
+- TensorBoard event files,
+- training logs,
+- metric CSV files,
+- saved model metadata,
+- evaluation plots.
 
 ---
 
@@ -982,15 +835,15 @@ A future cleanup may separate the direct MLP into a dedicated model class.
 ```text
 mlp_ip_cadelac/
 ├── cadelac/
-│   ├── control/
-│   ├── learning/
-│   │   ├── datasets/
-│   │   │   └── panda/
-│   │   ├── models/
-│   │   │   └── context_aware_delan.py
-│   │   ├── trained_models/
-│   │   └── train_panda.py
-│   └── ros/
+│   └── learning/
+│       ├── data_scripts/
+│       ├── datasets/
+│       │   └── panda/
+│       ├── models/
+│       │   └── context_aware_delan.py
+│       ├── trained_models/
+│       ├── train_panda.py
+│       └── train_panda_v2.py
 │
 ├── scripts/
 │   ├── data/
@@ -998,20 +851,14 @@ mlp_ip_cadelac/
 │   │   ├── make_all_exo_pkls.py
 │   │   └── fix_exo_pkl_time.py
 │   │
-│   ├── training/
-│   │   ├── train_exo_context_current_config.sh
-│   │   └── eval_exo_context_current_config.sh
-│   │
 │   └── evaluation/
 │       ├── evaluate_context_checkpoints.py
 │       ├── plot_context_checkpoint_metrics.py
 │       ├── plot_zoomed_context_torque_prediction.py
 │       └── plot_left_leg_torque_grid.py
 │
-├── run_context_eval_package.py
-├── cadelac_env.yml
-├── cadelac_ros_env.yml
-├── LICENSE
+├── logs/
+├── runs/
 └── README.md
 ```
 
@@ -1019,43 +866,49 @@ mlp_ip_cadelac/
 
 # Repository Hygiene
 
-Generated experiment artifacts should remain local.
+Generated training and evaluation files should normally remain local.
 
-The following should generally not be committed:
+This includes:
 
 ```text
 logs/
-exports/
+runs/
+generated datasets
 generated plots
-generated metric CSV files
-generated .pkl datasets
-trained .torch models
+metric CSV files
+trained models
 checkpoint directories
-Desktop ZIP packages
+ZIP packages
 Python cache files
 editor backup files
 ```
 
-Before committing, inspect the repository:
+Before committing changes, inspect the repository:
 
 ```bash
 git status --short
 ```
 
-Check whether a file is ignored:
+Inspect the files that are staged for the next commit:
 
 ```bash
-git check-ignore -v <path>
+git diff --cached --name-only
 ```
 
-Check formatting problems:
+Check the staged content:
+
+```bash
+git diff --cached
+```
+
+Check for formatting problems:
 
 ```bash
 git diff --check
 ```
 
-The repository should contain source code, reusable scripts and documentation,
-while generated data and experimental artifacts should be shared separately.
+The repository should primarily contain reusable source code and documentation.
+Generated experiment artifacts should be stored or shared separately.
 
 ---
 
