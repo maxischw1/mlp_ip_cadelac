@@ -160,7 +160,7 @@ if __name__ == "__main__":
              'n_lstm_depth': n_lstm_depth,
              'hist_length': hist_length,
              'act_ld': 'Softplus',
-             'max_epoch': 1000
+             'max_epoch': 100000
             }
 #change 2.3 model name
     model_name = 'mlp_lstm_notau_epochs_' + str(hyper['max_epoch'])
